@@ -183,6 +183,10 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         }
 
         isActivityRecreated = savedInstanceState != null
+        android.util.Log.i(
+            InputHandler.DEBUG_TAG,
+            "onCreate recreated=$isActivityRecreated displayId=${display?.displayId} displayName='${display?.name}'"
+        )
 
         // Set these options now so that the SurfaceView the game renders into is the right size.
         enableFullscreenImmersive()
@@ -242,6 +246,25 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        android.util.Log.i(
+            InputHandler.DEBUG_TAG,
+            "windowFocus=$hasFocus displayId=${display?.displayId} displayName='${display?.name}'"
+        )
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        android.util.Log.i(
+            InputHandler.DEBUG_TAG,
+            "configChanged displayId=${display?.displayId} densityDpi=${newConfig.densityDpi} " +
+                "screen=${newConfig.screenWidthDp}x${newConfig.screenHeightDp}"
+        )
+        InputHandler.updateControllerData()
+        notifyPhysicalControllerState()
     }
 
     override fun onResume() {

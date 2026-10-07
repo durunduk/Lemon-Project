@@ -87,7 +87,22 @@ object InputHandler {
         var controllerData = androidControllers[event.device.controllerNumber]
         if (controllerData == null) {
             updateControllerData()
-            controllerData = androidControllers[event.device.controllerNumber] ?: return false
+            controllerData = androidControllers[event.device.controllerNumber]
+            if (controllerData == null) {
+                android.util.Log.w(
+                    DEBUG_TAG,
+                    "DROPPED key=${event.keyCode} deviceId=${event.deviceId} " +
+                        "controllerNumber=${event.device?.controllerNumber} known=${androidControllers.keys}"
+                )
+                return false
+            }
+        }
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            android.util.Log.d(
+                DEBUG_TAG,
+                "key=${event.keyCode} deviceId=${event.deviceId} " +
+                    "-> guid=${controllerData.getGUID()} port=${controllerData.getPort()}"
+            )
         }
 
         NativeInput.onGamePadButtonEvent(
@@ -113,8 +128,15 @@ object InputHandler {
     }
 
     fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        val controllerData =
-            androidControllers[event.device.controllerNumber] ?: return false
+        val controllerData = androidControllers[event.device.controllerNumber]
+        if (controllerData == null) {
+            android.util.Log.w(
+                DEBUG_TAG,
+                "DROPPED motion deviceId=${event.deviceId} " +
+                    "controllerNumber=${event.device?.controllerNumber} known=${androidControllers.keys}"
+            )
+            return false
+        }
         event.device.motionRanges.forEach {
             NativeInput.onGamePadAxisEvent(
                 controllerData.getGUID(),
@@ -126,29 +148,89 @@ object InputHandler {
         return true
     }
 
+    // Ports a controller got earlier in this process, keyed by its stable descriptor. The saved
+    // button mapping is bound to (GUID, port), so a controller must keep its port when the device
+    // list changes, e.g. when an external display is attached in extended mode and Android
+    // re-enumerates input devices or the activity is recreated.
+    private val stablePorts = mutableMapOf<String, Int>()
+    private const val MAX_PORTS = 8
+    const val DEBUG_TAG = "LemonInputDbg"
+
     fun getDevices(): Map<Int, LemonPhysicalDevice> {
         val gameControllerDeviceIds = mutableMapOf<Int, LemonPhysicalDevice>()
-        val deviceIds = InputDevice.getDeviceIds()
-        var port = 0
         val inputSettings = NativeConfig.getInputSettings(true)
-        deviceIds.forEach { deviceId ->
-            InputDevice.getDevice(deviceId)?.apply {
-                if (isPhysicalGameController(this)) {
-                    if (!gameControllerDeviceIds.contains(controllerNumber)) {
-                        gameControllerDeviceIds[controllerNumber] = LemonPhysicalDevice(
-                            this,
-                            port,
-                            inputSettings[port].useSystemVibrator
-                        )
-                    }
-                    port++
+
+        // One entry per physical controller: several InputDevices can share a controllerNumber.
+        val controllers = linkedMapOf<Int, InputDevice>()
+        InputDevice.getDeviceIds().forEach { deviceId ->
+            val device = InputDevice.getDevice(deviceId) ?: return@forEach
+            val isController = isPhysicalGameController(device)
+            android.util.Log.i(
+                DEBUG_TAG,
+                "device id=$deviceId name='${device.name}' controllerNumber=${device.controllerNumber} " +
+                    "sources=0x${Integer.toHexString(device.sources)} vid=0x${Integer.toHexString(device.vendorId)} " +
+                    "pid=0x${Integer.toHexString(device.productId)} virtual=${device.isVirtual} " +
+                    "descriptor=${device.descriptor} isController=$isController"
+            )
+            if (isController && !controllers.containsKey(device.controllerNumber)) {
+                controllers[device.controllerNumber] = device
+            }
+        }
+
+        // Forget controllers that are gone, so their ports can be reused.
+        val presentDescriptors = controllers.values.map { it.descriptor }.toSet()
+        stablePorts.keys.retainAll(presentDescriptors)
+
+        // Controllers with a saved mapping claim their ports before others take the free ones.
+        val ordered = controllers.entries.sortedBy {
+            if (stablePorts.containsKey(it.value.descriptor) ||
+                savedPortForGuid(it.value.getGUID(), inputSettings) != null
+            ) 0 else 1
+        }
+        ordered.forEach { (controllerNumber, device) ->
+            val port = stablePorts.getOrPut(device.descriptor) {
+                // Prefer the port the saved mapping for this controller's GUID points at.
+                val savedPort = savedPortForGuid(device.getGUID(), inputSettings)
+                if (savedPort != null && savedPort !in stablePorts.values) {
+                    savedPort
+                } else {
+                    (0 until MAX_PORTS).firstOrNull { it !in stablePorts.values } ?: (MAX_PORTS - 1)
                 }
             }
+            gameControllerDeviceIds[controllerNumber] = LemonPhysicalDevice(
+                device,
+                port,
+                inputSettings[port].useSystemVibrator
+            )
+            android.util.Log.i(
+                DEBUG_TAG,
+                "controller '${device.name}' controllerNumber=$controllerNumber -> port=$port guid=${device.getGUID()}"
+            )
         }
         return gameControllerDeviceIds
     }
 
+    private fun savedPortForGuid(
+        guid: String,
+        inputSettings: Array<dev.lemon.lemon_emu.features.input.model.PlayerInput>
+    ): Int? {
+        inputSettings.forEach { player ->
+            player.buttons.forEach { serialized ->
+                if (serialized.isEmpty()) return@forEach
+                val params = ParamPackage(serialized)
+                if (params.get("engine", "") == "android" &&
+                    params.get("guid", "").equals(guid, ignoreCase = true) &&
+                    params.has("port")
+                ) {
+                    return params.get("port", 0).takeIf { it in 0 until MAX_PORTS }
+                }
+            }
+        }
+        return null
+    }
+
     fun updateControllerData() {
+        android.util.Log.i(DEBUG_TAG, "updateControllerData()")
         androidControllers = getDevices()
         androidControllers.forEach {
             NativeInput.registerController(it.value)
