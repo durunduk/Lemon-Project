@@ -1245,4 +1245,5 @@
     <string name="add_folders">Добавить папку</string>
     <string name="percent">%1$d %%</string>
 
+    <string name="controller_input_sink_message">Игра на внешнем экране.\nВвод с геймпада передаётся в эмулятор.\n\nНажмите «Назад» на телефоне, чтобы закрыть этот экран.</string>
 </resources>

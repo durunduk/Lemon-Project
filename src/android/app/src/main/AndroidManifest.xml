@@ -86,6 +86,16 @@ SPDX-License-Identifier: GPL-3.0-or-later
             android:label="@string/preferences_settings"/>
 
         <activity
+            android:name="dev.lemon.lemon_emu.activities.ControllerInputSinkActivity"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
+            android:taskAffinity="dev.lemon.lemon_emu.inputsink"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density|keyboard|keyboardHidden|navigation"
+            android:exported="false" />
+
+        <activity
             android:name="dev.lemon.lemon_emu.activities.EmulationActivity"
             android:theme="@style/Theme.Lemon.Main"
             android:launchMode="singleTop"

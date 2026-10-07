@@ -183,6 +183,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         }
 
         isActivityRecreated = savedInstanceState != null
+        current = java.lang.ref.WeakReference(this)
+        displayManager.registerDisplayListener(displayListener, mainHandler)
 
         // Set these options now so that the SurfaceView the game renders into is the right size.
         enableFullscreenImmersive()
@@ -244,6 +246,51 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         return super.onKeyDown(keyCode, event)
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            updateControllerInputSink()
+        }
+    }
+
+    private val displayManager by lazy {
+        getSystemService(DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+    }
+
+    private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = updateControllerInputSink()
+        override fun onDisplayRemoved(displayId: Int) = updateControllerInputSink()
+        override fun onDisplayChanged(displayId: Int) = updateControllerInputSink()
+    }
+
+    /**
+     * While the game is on an external display and a controller is connected, show
+     * [ControllerInputSinkActivity] on the phone's display, so controller buttons that Android
+     * delivers to that display still reach the game.
+     */
+    private fun updateControllerInputSink() {
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        val displayId = display?.displayId ?: return
+        val onExternalDisplay = displayId != android.view.Display.DEFAULT_DISPLAY &&
+            displayManager.getDisplays(android.hardware.display.DisplayManager.DISPLAY_CATEGORY_PRESENTATION)
+                .any { it.displayId == displayId }
+        if (onExternalDisplay && InputHandler.androidControllers.isNotEmpty()) {
+            if (!ControllerInputSinkActivity.isShowing() && !ControllerInputSinkActivity.dismissedByUser) {
+                Log.info("[EmulationActivity] Game on external display $displayId, forwarding controller input")
+                ControllerInputSinkActivity.show(this)
+            }
+        } else {
+            if (displayId == android.view.Display.DEFAULT_DISPLAY) {
+                ControllerInputSinkActivity.dismissedByUser = false
+            }
+            if (ControllerInputSinkActivity.isShowing()) {
+                ControllerInputSinkActivity.hide()
+            }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         nfcReader.startScanning()
@@ -262,6 +309,14 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(romSwapStopTimeoutRunnable)
+        displayManager.unregisterDisplayListener(displayListener)
+        if (!isChangingConfigurations) {
+            ControllerInputSinkActivity.hide()
+            ControllerInputSinkActivity.dismissedByUser = false
+        }
+        if (current?.get() === this) {
+            current = null
+        }
         super.onDestroy()
         inputManager.unregisterInputDeviceListener(this)
         stopForegroundService(this)
@@ -564,6 +619,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     private fun notifyPhysicalControllerState() {
+        updateControllerInputSink()
         val navHostFragment =
             supportFragmentManager.findFragmentById(R.id.fragment_container) as? NavHostFragment
         val emulationFragment =
@@ -927,6 +983,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     companion object {
+        @Volatile
+        var current: java.lang.ref.WeakReference<EmulationActivity>? = null
+
         const val EXTRA_SELECTED_GAME = "SelectedGame"
         const val EXTRA_OVERLAY_GAMELESS_EDIT_MODE = "overlayGamelessEditMode"
         private const val ROM_SWAP_STOP_TIMEOUT_MS = 5000L
