@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Display
 import android.view.Gravity
 import android.view.KeyEvent
@@ -30,9 +31,13 @@ import java.lang.ref.WeakReference
  */
 class ControllerInputSinkActivity : Activity() {
 
+    private var createdAt = 0L
+    private var refocusTried = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         current = WeakReference(this)
+        createdAt = SystemClock.uptimeMillis()
         setContentView(
             TextView(this).apply {
                 setBackgroundColor(Color.BLACK)
@@ -44,6 +49,24 @@ class ControllerInputSinkActivity : Activity() {
                 setText(R.string.controller_input_sink_message)
             }
         )
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Some vendors open their own panel on the phone's display when an external display is
+        // connected (RedMagic shows a touchpad), right after this activity, and it takes the
+        // focus. Come back to the front once, only in the first seconds, so a window the user
+        // opens later on the phone is left alone.
+        if (!hasFocus && !refocusTried && !isFinishing &&
+            SystemClock.uptimeMillis() - createdAt < REFOCUS_WINDOW_MS
+        ) {
+            refocusTried = true
+            window.decorView.postDelayed({
+                if (!isFinishing && !isDestroyed && !hasWindowFocus()) {
+                    bringToFront(this)
+                }
+            }, REFOCUS_DELAY_MS)
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -80,6 +103,9 @@ class ControllerInputSinkActivity : Activity() {
         EmulationActivity.current?.get()?.takeIf { !it.isFinishing && !it.isDestroyed }
 
     companion object {
+        private const val REFOCUS_WINDOW_MS = 5000L
+        private const val REFOCUS_DELAY_MS = 300L
+
         @Volatile
         private var current: WeakReference<ControllerInputSinkActivity>? = null
 
@@ -101,6 +127,15 @@ class ControllerInputSinkActivity : Activity() {
             }.onFailure {
                 Log.warning("[ControllerInputSink] Could not show on the default display: ${it.message}")
             }
+        }
+
+        private fun bringToFront(context: Context) {
+            val intent = Intent(context, ControllerInputSinkActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION
+            )
+            val options = ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY)
+            runCatching { context.startActivity(intent, options.toBundle()) }
         }
 
         fun hide() {
