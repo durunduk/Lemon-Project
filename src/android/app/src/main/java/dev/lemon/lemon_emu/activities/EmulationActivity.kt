@@ -183,6 +183,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         }
 
         isActivityRecreated = savedInstanceState != null
+        current = java.lang.ref.WeakReference(this)
+        (getSystemService(DISPLAY_SERVICE) as android.hardware.display.DisplayManager)
+            .registerDisplayListener(displayListener, mainHandler)
         android.util.Log.i(
             InputHandler.DEBUG_TAG,
             "onCreate recreated=$isActivityRecreated displayId=${display?.displayId} displayName='${display?.name}'"
@@ -254,6 +257,38 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
             InputHandler.DEBUG_TAG,
             "windowFocus=$hasFocus displayId=${display?.displayId} displayName='${display?.name}'"
         )
+        if (hasFocus) {
+            updateControllerInputSink()
+        }
+    }
+
+    private val displayListener = object : android.hardware.display.DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = updateControllerInputSink()
+        override fun onDisplayRemoved(displayId: Int) = updateControllerInputSink()
+        override fun onDisplayChanged(displayId: Int) = updateControllerInputSink()
+    }
+
+    /**
+     * While the game is on an external display, show [ControllerInputSinkActivity] on the phone's
+     * display so controller buttons that Android delivers there still reach the emulator.
+     */
+    private fun updateControllerInputSink() {
+        if (isFinishing || isDestroyed) {
+            return
+        }
+        val displayId = display?.displayId ?: return
+        if (displayId != android.view.Display.DEFAULT_DISPLAY) {
+            if (!ControllerInputSinkActivity.isShowing() && !ControllerInputSinkActivity.dismissedByUser) {
+                android.util.Log.i(InputHandler.DEBUG_TAG, "game on display $displayId: showing input sink")
+            }
+            ControllerInputSinkActivity.show(this)
+        } else {
+            ControllerInputSinkActivity.dismissedByUser = false
+            if (ControllerInputSinkActivity.isShowing()) {
+                android.util.Log.i(InputHandler.DEBUG_TAG, "game back on default display: hiding input sink")
+                ControllerInputSinkActivity.hide()
+            }
+        }
     }
 
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
@@ -265,6 +300,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
         )
         InputHandler.updateControllerData()
         notifyPhysicalControllerState()
+        updateControllerInputSink()
     }
 
     override fun onResume() {
@@ -285,6 +321,15 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(romSwapStopTimeoutRunnable)
+        (getSystemService(DISPLAY_SERVICE) as android.hardware.display.DisplayManager)
+            .unregisterDisplayListener(displayListener)
+        if (!isChangingConfigurations) {
+            ControllerInputSinkActivity.hide()
+            ControllerInputSinkActivity.dismissedByUser = false
+        }
+        if (current?.get() === this) {
+            current = null
+        }
         super.onDestroy()
         inputManager.unregisterInputDeviceListener(this)
         stopForegroundService(this)
@@ -950,6 +995,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener, InputManager
     }
 
     companion object {
+        @Volatile
+        var current: java.lang.ref.WeakReference<EmulationActivity>? = null
+
         const val EXTRA_SELECTED_GAME = "SelectedGame"
         const val EXTRA_OVERLAY_GAMELESS_EDIT_MODE = "overlayGamelessEditMode"
         private const val ROM_SWAP_STOP_TIMEOUT_MS = 5000L
